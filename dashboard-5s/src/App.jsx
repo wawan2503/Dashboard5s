@@ -1,8 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { InteractionStatus } from "@azure/msal-browser";
 import { useMsal } from "@azure/msal-react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import Dashboard from "./Dashboard.jsx";
 import SharePointAuditDashboard from "./SharePointAuditDashboard.jsx";
 import { authStorageKeys, loginRequest } from "./authConfig.js";
 
@@ -59,6 +58,7 @@ function Card({ children }) {
 
 function RequireAuth({ instance, account, inProgress, err, setErr, children }) {
   const [isRetrying, setIsRetrying] = useState(false);
+  const forcedRetryOnceRef = useRef(false);
 
   const tryLoginRedirect = useCallback(async () => {
     try {
@@ -104,20 +104,40 @@ function RequireAuth({ instance, account, inProgress, err, setErr, children }) {
     if (inProgress !== InteractionStatus.None) return;
 
     // Auto-redirect once per tab/session to avoid infinite loops.
-    // If the redirect flow fails to produce an account (misconfigured redirect URI, blocked storage, etc),
-    // we keep the user on this screen and allow manual retry.
-    if (getSessionFlag(authStorageKeys.autoLoginAttempted) === "1") return;
+    // Some browsers restore sessionStorage after a restart (restore tabs), which can leave this flag stuck at "1"
+    // even though no MSAL account is present. In that case, force exactly one retry per mount.
+    const attempted = getSessionFlag(authStorageKeys.autoLoginAttempted) === "1";
+    const cachedAccounts = instance.getAllAccounts?.()?.length || 0;
+
+    if (attempted) {
+      if (!forcedRetryOnceRef.current && cachedAccounts === 0) {
+        forcedRetryOnceRef.current = true;
+        setSessionFlag(authStorageKeys.autoLoginAttempted, "1");
+        void tryLoginRedirect();
+      }
+      return;
+    }
 
     setSessionFlag(authStorageKeys.autoLoginAttempted, "1");
     void tryLoginRedirect();
-  }, [account, inProgress, tryLoginRedirect]);
+  }, [account, inProgress, instance, tryLoginRedirect]);
 
   if (account) return children;
 
   return (
     <Container>
       <div style={{ marginTop: 72 }}>
-        <Card>
+        <div
+          style={{
+            maxWidth: 560,
+            margin: "0 auto",
+            background: "#fff",
+            border: "1px solid rgba(0,0,0,0.08)",
+            borderRadius: 12,
+            padding: 16,
+            boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+          }}
+        >
           <h2 style={{ marginTop: 0, marginBottom: 6 }}>Memproses sesi Microsoft...</h2>
           <div style={{ color: "rgba(0,0,0,0.7)", fontSize: 13 }}>
             Jika belum ada sesi, halaman akan otomatis dialihkan ke login Microsoft.
@@ -170,40 +190,13 @@ function RequireAuth({ instance, account, inProgress, err, setErr, children }) {
               {err}
             </pre>
           ) : null}
-        </Card>
-      </div>
-    </Container>
-  );
-}
-
-function AppShell({ account, onLogout, children }) {
-  const userLabel = useMemo(() => {
-    const name = account?.name || "";
-    const username = account?.username || "";
-    return name && username ? `${name} (${username})` : name || username || "";
-  }, [account]);
-
-  return (
-    <Container>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
-        <div>
-          <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.2 }}>Dashboard 5S</div>
-          {userLabel ? <div style={{ fontSize: 12, color: "rgba(0,0,0,0.6)" }}>Login sebagai {userLabel}</div> : null}
         </div>
-        {account ? (
-          <button onClick={onLogout} type="button">
-            Logout
-          </button>
-        ) : null}
       </div>
-      {children}
     </Container>
   );
 }
 
 function DashboardPage({ instance, account, setErr, forceRerender }) {
-  const [tab, setTab] = useState("audit");
-
   const onLogout = async () => {
     try {
       setErr("");
@@ -217,20 +210,11 @@ function DashboardPage({ instance, account, setErr, forceRerender }) {
   };
 
   return (
-    <AppShell account={account} onLogout={onLogout}>
-      <Card>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-          <button onClick={() => setTab("audit")} type="button" disabled={tab === "audit"}>
-            Audit 5S (SharePoint)
-          </button>
-          <button onClick={() => setTab("graph")} type="button" disabled={tab === "graph"}>
-            Profil (Graph)
-          </button>
-        </div>
-
-        {tab === "audit" ? <SharePointAuditDashboard instance={instance} account={account} /> : <Dashboard instance={instance} account={account} />}
-      </Card>
-    </AppShell>
+    <div style={{ width: "100%", padding: 16 }}>
+      <div style={{ maxWidth: 1280, margin: "0 auto" }}>
+        <SharePointAuditDashboard instance={instance} account={account} onLogout={onLogout} />
+      </div>
+    </div>
   );
 }
 

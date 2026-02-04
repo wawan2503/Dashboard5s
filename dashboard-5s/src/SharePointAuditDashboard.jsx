@@ -106,7 +106,7 @@ function mapGraphItemsToRows(items, fieldMap) {
   });
 }
 
-export default function SharePointAuditDashboard({ instance, account }) {
+export default function SharePointAuditDashboard({ instance, account, onLogout }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [siteId, setSiteId] = useState("");
@@ -167,7 +167,7 @@ export default function SharePointAuditDashboard({ instance, account }) {
         <div style={{ marginBottom: 12, fontSize: 13, color: "rgba(0,0,0,0.65)" }}>Mengambil data SharePoint...</div>
       ) : null}
 
-      <AuditDashboard source={`sharepoint-list:${siteId || config.listId}`} listItems={rows} />
+      <AuditDashboard source={`sharepoint-list:${siteId || config.listId}`} listItems={rows} onLogout={onLogout} />
       {tokenScopes ? (
         <div style={{ marginTop: 10, fontSize: 11, color: "rgba(0,0,0,0.5)" }}>Token scopes: {tokenScopes}</div>
       ) : null}

@@ -85,9 +85,10 @@ function Pill({ text, tone = "neutral" }) {
   );
 }
 
-function Card({ title, subtitle, right, children }) {
+function Card({ id, title, subtitle, right, children }) {
   return (
     <section
+      id={id}
       style={{
         background: "#fff",
         border: "1px solid rgba(15, 23, 42, 0.08)",
@@ -110,6 +111,13 @@ function Card({ title, subtitle, right, children }) {
 }
 
 const CHART_COLORS = ["#2563eb", "#16a34a", "#f59e0b", "#ef4444", "#9333ea", "#14b8a6", "#f97316", "#64748b"];
+
+function colorFromLabel(label) {
+  const s = String(label || "");
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return CHART_COLORS[h % CHART_COLORS.length];
+}
 
 function toNumber(value) {
   if (value === null || value === undefined) return null;
@@ -183,6 +191,39 @@ function dateKeyForTrend(value) {
   return d ? localDateKey(d) : "";
 }
 
+function parseLocalDateOnly(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    const d = new Date(value);
+    d.setHours(0, 0, 0, 0);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const s = String(value).trim();
+  if (!s) return null;
+
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) {
+    const yyyy = Number(m[1]);
+    const mm = Number(m[2]);
+    const dd = Number(m[3]);
+    const d = new Date(yyyy, mm - 1, dd);
+    d.setHours(0, 0, 0, 0);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function diffDaysLocal(a, b) {
+  if (!a || !b) return null;
+  const ms = a.getTime() - b.getTime();
+  return Math.round(ms / 86400000);
+}
+
 function normalizeAuditStatus(raw) {
   const s = String(raw || "").trim();
   if (!s) return "";
@@ -190,6 +231,129 @@ function normalizeAuditStatus(raw) {
   if (/open/i.test(s)) return "Open";
   if (/progress/i.test(s)) return "In Progress";
   return s;
+}
+
+function normalizeValidation(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  if (/^(ok|yes|y)$/i.test(s)) return "OK";
+  if (/^(ng|no|n)$/i.test(s)) return "NG";
+  return s;
+}
+
+function normalizeFollowUpStage({ planDate, doneDate }) {
+  if (doneDate) return "Completed";
+  if (!planDate) return "No Plan";
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  if (planDate.getTime() < today.getTime()) return "Overdue";
+  return "On Track";
+}
+
+function buildStackedCountsBy(rows, getGroupLabel, getSegmentLabel, options = {}) {
+  const maxGroups = typeof options.maxGroups === "number" ? options.maxGroups : 8;
+  const segmentOrder = Array.isArray(options.segmentOrder) ? options.segmentOrder : null;
+
+  const groupMap = new Map(); // group -> Map(segment -> count)
+  for (const r of rows) {
+    const group = String(getGroupLabel(r) || "").trim();
+    if (!group) continue;
+    const seg = String(getSegmentLabel(r) || "").trim();
+    if (!seg) continue;
+
+    const segMap = groupMap.get(group) || new Map();
+    segMap.set(seg, (segMap.get(seg) || 0) + 1);
+    groupMap.set(group, segMap);
+  }
+
+  const groups = Array.from(groupMap.entries()).map(([label, segMap]) => {
+    const segments = Array.from(segMap.entries()).map(([sLabel, value]) => ({ label: sLabel, value }));
+    const total = segments.reduce((sum, it) => sum + it.value, 0);
+
+    let orderedSegments = segments;
+    if (segmentOrder) {
+      const orderIndex = new Map(segmentOrder.map((s, idx) => [String(s), idx]));
+      orderedSegments = segments.slice().sort((a, b) => {
+        const ai = orderIndex.has(a.label) ? orderIndex.get(a.label) : 999;
+        const bi = orderIndex.has(b.label) ? orderIndex.get(b.label) : 999;
+        return ai - bi || b.value - a.value || a.label.localeCompare(b.label);
+      });
+    } else {
+      orderedSegments = segments.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+    }
+
+    return { label, total, segments: orderedSegments };
+  });
+
+  return groups
+    .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label))
+    .slice(0, maxGroups);
+}
+
+function StackedBarList({ items, colorForSegment, maxItems = 8 }) {
+  const top = (items || []).slice(0, maxItems);
+
+  if (!top.length) return <div style={{ color: "rgba(0,0,0,0.65)" }}>Tidak ada data.</div>;
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      {top.map((it) => {
+        const total = typeof it.total === "number" ? it.total : (it.segments || []).reduce((s, x) => s + (x.value || 0), 0);
+        return (
+          <div key={it.label} style={{ display: "grid", gap: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
+              <div style={{ fontWeight: 700, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={it.label}>
+                {it.label}
+              </div>
+              <div style={{ fontSize: 12, color: "rgba(0,0,0,0.65)" }}>Total: {total}</div>
+            </div>
+
+            <div
+              style={{
+                height: 12,
+                borderRadius: 999,
+                overflow: "hidden",
+                background: "rgba(0,0,0,0.06)",
+                display: "flex",
+              }}
+              aria-label={`stacked-${it.label}`}
+            >
+              {(it.segments || []).map((s) => {
+                const w = total > 0 ? (s.value / total) * 100 : 0;
+                const color = typeof colorForSegment === "function" ? colorForSegment(s.label) : colorFromLabel(s.label);
+                return (
+                  <div
+                    key={s.label}
+                    title={`${s.label}: ${s.value}`}
+                    style={{
+                      width: `${w}%`,
+                      background: color,
+                    }}
+                  />
+                );
+              })}
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 11, color: "rgba(0,0,0,0.65)" }}>
+              {(it.segments || []).slice(0, 6).map((s) => {
+                const color = typeof colorForSegment === "function" ? colorForSegment(s.label) : colorFromLabel(s.label);
+                return (
+                  <div key={s.label} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 3, background: color, display: "inline-block" }} />
+                    <span>
+                      {s.label}: {s.value}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function buildCounts(rows, key, normalize) {
@@ -473,14 +637,16 @@ function DetailPanel({ row, onClose }) {
   );
 }
 
-export default function AuditDashboard({ source = "sample", listItems }) {
+export default function AuditDashboard({ source = "sample", listItems, onLogout }) {
   // `listItems` can be:
   // - already mapped rows: [{ id, Title, Area, ... }]
   // - Graph list items: [{ id, fields: {...} }]
   const [selected, setSelected] = useState(null);
   const [showTable, setShowTable] = useState(false);
+  const [view, setView] = useState("audit");
   const [search, setSearch] = useState("");
   const [area, setArea] = useState("");
+  const [category, setCategory] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
   const pageSize = 50;
@@ -494,6 +660,7 @@ export default function AuditDashboard({ source = "sample", listItems }) {
     setShowTable(false);
     setSearch("");
     setArea("");
+    setCategory("");
     setStatus("");
     setPage(1);
   };
@@ -521,8 +688,9 @@ export default function AuditDashboard({ source = "sample", listItems }) {
     const s = search.trim().toLowerCase();
     return base.filter((r) => {
       const areaOk = !area || String(r.Area || "").toLowerCase() === area.toLowerCase();
+      const categoryOk = !category || String(r["5S Category"] || "").toLowerCase() === category.toLowerCase();
       const statusOk = !status || String(r["Audit Status"] || "").toLowerCase() === status.toLowerCase();
-      if (!areaOk || !statusOk) return false;
+      if (!areaOk || !categoryOk || !statusOk) return false;
       if (!s) return true;
 
       const hay = [r.Title, r.Area, r["Sub Area"], r["5S"], r["5S Category"], r["5S Item"], r.Auditor, r.Auditee, r.Approvers]
@@ -531,7 +699,7 @@ export default function AuditDashboard({ source = "sample", listItems }) {
         .toLowerCase();
       return hay.includes(s);
     });
-  }, [area, baseRows, search, status]);
+  }, [area, baseRows, category, search, status]);
 
   const distinctAreas = useMemo(() => {
     const set = new Set();
@@ -545,6 +713,14 @@ export default function AuditDashboard({ source = "sample", listItems }) {
     const set = new Set();
     for (const r of baseRows) {
       if (r["Audit Status"]) set.add(String(r["Audit Status"]));
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [baseRows]);
+
+  const distinctCategories = useMemo(() => {
+    const set = new Set();
+    for (const r of baseRows) {
+      if (r["5S Category"]) set.add(String(r["5S Category"]));
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [baseRows]);
@@ -619,7 +795,177 @@ export default function AuditDashboard({ source = "sample", listItems }) {
 
   const chartAuditStatus = useMemo(() => buildCounts(rows, "Audit Status", normalizeAuditStatus).slice(0, 8), [rows]);
   const chartAreaCounts = useMemo(() => buildCounts(rows, "Area").slice(0, 8), [rows]);
+  const chartSubAreaCounts = useMemo(() => buildCounts(rows, "Sub Area").slice(0, 8), [rows]);
+  const chartAuditorCounts = useMemo(() => buildCounts(rows, "Auditor").slice(0, 8), [rows]);
+  const chart5SCounts = useMemo(() => buildCounts(rows, "5S").slice(0, 8), [rows]);
+  const chartValidationCounts = useMemo(() => buildCounts(rows, "5S Validation", normalizeValidation).slice(0, 8), [rows]);
   const chartAvgScoreByArea = useMemo(() => buildAverages(rows, "Area", "Audit Score").slice(0, 8), [rows]);
+  const chartAvgScoreBy5S = useMemo(() => buildAverages(rows, "5S", "Audit Score").slice(0, 8), [rows]);
+  const chartFollowUpStatus = useMemo(() => buildCounts(rows, "Follow Up Status").slice(0, 8), [rows]);
+
+  const chartAuditStatusByCategory = useMemo(
+    () =>
+      buildStackedCountsBy(
+        rows,
+        (r) => r?.["5S Category"],
+        (r) => normalizeAuditStatus(r?.["Audit Status"]),
+        { maxGroups: 8, segmentOrder: ["Open", "In Progress", "Closed"] }
+      ),
+    [rows]
+  );
+
+  const chartValidationByCategory = useMemo(
+    () =>
+      buildStackedCountsBy(
+        rows,
+        (r) => r?.["5S Category"],
+        (r) => normalizeValidation(r?.["5S Validation"]),
+        { maxGroups: 8, segmentOrder: ["OK", "NG"] }
+      ),
+    [rows]
+  );
+
+  const chartFollowUpStageByCategory = useMemo(
+    () =>
+      buildStackedCountsBy(
+        rows,
+        (r) => r?.["5S Category"],
+        (r) => {
+          const planDate = parseLocalDateOnly(r?.["Follow Up Plan Date"]);
+          const doneDate = parseLocalDateOnly(r?.["Follow Up Date"]);
+          return normalizeFollowUpStage({ planDate, doneDate });
+        },
+        { maxGroups: 8, segmentOrder: ["Overdue", "On Track", "Completed", "No Plan"] }
+      ),
+    [rows]
+  );
+
+  const followUpStageCounts = useMemo(() => {
+    const map = new Map();
+    for (const r of rows) {
+      const planDate = parseLocalDateOnly(r?.["Follow Up Plan Date"]);
+      const doneDate = parseLocalDateOnly(r?.["Follow Up Date"]);
+      const stage = normalizeFollowUpStage({ planDate, doneDate });
+      map.set(stage, (map.get(stage) || 0) + 1);
+    }
+    return Array.from(map.entries())
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  }, [rows]);
+
+  const followUpOverdueByArea = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const map = new Map();
+    for (const r of rows) {
+      const doneDate = parseLocalDateOnly(r?.["Follow Up Date"]);
+      if (doneDate) continue;
+      const planDate = parseLocalDateOnly(r?.["Follow Up Plan Date"]);
+      if (!planDate || planDate.getTime() >= today.getTime()) continue;
+      const area = String(r?.Area || "").trim();
+      if (!area) continue;
+      map.set(area, (map.get(area) || 0) + 1);
+    }
+    return Array.from(map.entries())
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label))
+      .slice(0, 8);
+  }, [rows]);
+
+  const followUpAvgDelayByArea = useMemo(() => {
+    const acc = new Map(); // area -> { sumDays, count }
+    for (const r of rows) {
+      const doneDate = parseLocalDateOnly(r?.["Follow Up Date"]);
+      if (!doneDate) continue;
+
+      const baseDate = parseLocalDateOnly(r?.["Audit Date"]) || parseLocalDateOnly(r?.Created) || parseLocalDateOnly(r?.Modified);
+      if (!baseDate) continue;
+
+      const days = diffDaysLocal(doneDate, baseDate);
+      if (days === null) continue;
+
+      const area = String(r?.Area || "").trim();
+      if (!area) continue;
+
+      const cur = acc.get(area) || { sum: 0, count: 0 };
+      cur.sum += days;
+      cur.count += 1;
+      acc.set(area, cur);
+    }
+
+    return Array.from(acc.entries())
+      .map(([label, v]) => ({ label, value: v.count ? v.sum / v.count : 0 }))
+      .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label))
+      .slice(0, 8);
+  }, [rows]);
+
+  const followUpCompletedTrend14d = useMemo(() => {
+    const byDay = new Map();
+    for (const r of rows) {
+      const k = dateKeyForTrend(r?.["Follow Up Date"]);
+      if (!k) continue;
+      byDay.set(k, (byDay.get(k) || 0) + 1);
+    }
+
+    const end = new Date();
+    end.setHours(0, 0, 0, 0);
+
+    const days = 14;
+    const labels = [];
+    const values = [];
+    for (let i = days - 1; i >= 0; i -= 1) {
+      const d = new Date(end);
+      d.setDate(end.getDate() - i);
+      const k = localDateKey(d);
+      labels.push(k);
+      values.push(byDay.get(k) || 0);
+    }
+
+    const total = values.reduce((s, x) => s + x, 0);
+    const max = values.reduce((m, x) => Math.max(m, x), 0);
+    const rangeLabel = labels.length ? `${labels[0]} -> ${labels[labels.length - 1]}` : "";
+
+    return { labels, values, total, max, rangeLabel };
+  }, [rows]);
+
+  const followUpDueNext14d = useMemo(() => {
+    const byDay = new Map();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    for (const r of rows) {
+      const doneDate = parseLocalDateOnly(r?.["Follow Up Date"]);
+      if (doneDate) continue;
+
+      const planDate = parseLocalDateOnly(r?.["Follow Up Plan Date"]);
+      if (!planDate) continue;
+
+      const delta = diffDaysLocal(planDate, today);
+      if (delta === null || delta < 0 || delta > 13) continue;
+
+      const k = localDateKey(planDate);
+      byDay.set(k, (byDay.get(k) || 0) + 1);
+    }
+
+    const days = 14;
+    const labels = [];
+    const values = [];
+    for (let i = 0; i < days; i += 1) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const k = localDateKey(d);
+      labels.push(k);
+      values.push(byDay.get(k) || 0);
+    }
+
+    const total = values.reduce((s, x) => s + x, 0);
+    const max = values.reduce((m, x) => Math.max(m, x), 0);
+    const rangeLabel = labels.length ? `${labels[0]} -> ${labels[labels.length - 1]}` : "";
+
+    return { labels, values, total, max, rangeLabel };
+  }, [rows]);
+
   const chartTrend14d = useMemo(() => {
     const byDay = new Map();
 
@@ -679,8 +1025,43 @@ export default function AuditDashboard({ source = "sample", listItems }) {
         </div>
       </div>
 
-	      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 12 }}>
-	        <Card title="Grafik: Audit Status" subtitle="Distribusi status (sesuai filter)">
+      <div className="audit-layout" style={{ marginTop: 12 }}>
+        <aside className="audit-side">
+          <div style={{ fontWeight: 800 }}>Kategori</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            <button className={`nav-btn ${view === "audit" ? "nav-btn--active" : ""}`} type="button" onClick={() => setView("audit")}>
+              Audit
+            </button>
+            <button className={`nav-btn ${view === "score" ? "nav-btn--active" : ""}`} type="button" onClick={() => setView("score")}>
+              Skor
+            </button>
+            <button className={`nav-btn ${view === "followup" ? "nav-btn--active" : ""}`} type="button" onClick={() => setView("followup")}>
+              Follow Up
+            </button>
+            <button className={`nav-btn ${view === "perCategory" ? "nav-btn--active" : ""}`} type="button" onClick={() => setView("perCategory")}>
+              Per Kategori
+            </button>
+            <button className={`nav-btn ${view === "trend" ? "nav-btn--active" : ""}`} type="button" onClick={() => setView("trend")}>
+              Trend
+            </button>
+            <button className={`nav-btn ${view === "table" ? "nav-btn--active" : ""}`} type="button" onClick={() => setView("table")}>
+              Tabel
+            </button>
+          </div>
+
+          {typeof onLogout === "function" ? (
+            <div style={{ marginTop: "auto", paddingTop: 10, borderTop: "1px solid rgba(0,0,0,0.06)" }}>
+              <button type="button" onClick={onLogout} style={{ width: "100%" }}>
+                Logout Microsoft
+              </button>
+            </div>
+          ) : null}
+        </aside>
+
+        <div className="audit-content">
+          <div style={{ display: view === "table" ? "none" : "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 12 }}>
+            <div style={{ display: view === "audit" ? "contents" : "none" }}>
+	        <Card id="sec-audit" title="Grafik: Audit Status" subtitle="Distribusi status (sesuai filter)">
 	          <DonutChart
 	            items={chartAuditStatus}
 	            titleTotal="audit"
@@ -698,11 +1079,138 @@ export default function AuditDashboard({ source = "sample", listItems }) {
           <BarList items={chartAreaCounts} valueFormat={(it) => String(it.value)} />
         </Card>
 
-        <Card title="Grafik: Avg Score per Area" subtitle="Rata-rata Audit Score (yang punya angka)">
+        <Card title="Grafik: Top Sub Area" subtitle="Jumlah audit per sub area (sesuai filter)">
+          <BarList items={chartSubAreaCounts} valueFormat={(it) => String(it.value)} />
+        </Card>
+
+        <Card title="Grafik: Top Auditor" subtitle="Jumlah audit per auditor (sesuai filter)">
+          <BarList items={chartAuditorCounts} valueFormat={(it) => String(it.value)} />
+        </Card>
+
+        <Card title="Grafik: Distribusi 5S" subtitle="Jumlah audit per 5S (sesuai filter)">
+          <DonutChart items={chart5SCounts} titleTotal="audit" colorForLabel={colorFromLabel} />
+        </Card>
+
+        <Card title="Grafik: Validasi 5S" subtitle="Distribusi OK vs NG (sesuai filter)">
+          <DonutChart
+            items={chartValidationCounts}
+            titleTotal="validasi"
+            colorForLabel={(label) => {
+              const s = String(label || "").trim().toLowerCase();
+              if (s === "ok") return "#16a34a";
+              if (s === "ng") return "#ef4444";
+              return colorFromLabel(label);
+            }}
+          />
+        </Card>
+            </div>
+
+            <div style={{ display: view === "score" ? "contents" : "none" }}>
+        <Card id="sec-score" title="Grafik: Avg Score per Area" subtitle="Rata-rata Audit Score (yang punya angka)">
           <BarList items={chartAvgScoreByArea} valueFormat={(it) => it.value.toFixed(2)} />
         </Card>
 
+        <Card title="Grafik: Avg Score per 5S" subtitle="Rata-rata Audit Score per 5S (yang punya angka)">
+          <BarList items={chartAvgScoreBy5S} valueFormat={(it) => it.value.toFixed(2)} />
+        </Card>
+            </div>
+
+            <div style={{ display: view === "followup" ? "contents" : "none" }}>
+        <Card id="sec-followup" title="Grafik Follow Up: Status" subtitle="Distribusi Follow Up Status (sesuai filter)">
+          <DonutChart items={chartFollowUpStatus} titleTotal="follow up" colorForLabel={colorFromLabel} />
+        </Card>
+
+        <Card title="Grafik Follow Up: Tahap" subtitle="Completed / Overdue / On Track / No Plan">
+          <DonutChart
+            items={followUpStageCounts}
+            titleTotal="item"
+            colorForLabel={(label) => {
+              const s = String(label || "").toLowerCase();
+              if (s === "completed") return "#16a34a";
+              if (s === "overdue") return "#ef4444";
+              if (s === "on track" || s === "ontrack") return "#2563eb";
+              if (s === "no plan" || s === "noplan") return "#64748b";
+              return colorFromLabel(label);
+            }}
+          />
+        </Card>
+
+        <Card title="Grafik Follow Up: Overdue per Area" subtitle="Jumlah follow up overdue (belum selesai)">
+          <BarList items={followUpOverdueByArea} valueFormat={(it) => String(it.value)} />
+        </Card>
+
+        <Card title="Grafik Follow Up: Avg Durasi per Area" subtitle="Rata-rata hari dari Audit Date -> Follow Up Date">
+          <BarList items={followUpAvgDelayByArea} valueFormat={(it) => `${it.value.toFixed(1)} hari`} />
+        </Card>
+
         <Card
+          title="Grafik Follow Up: Selesai (Trend)"
+          subtitle={followUpCompletedTrend14d.rangeLabel ? `14 hari: ${followUpCompletedTrend14d.rangeLabel}` : "14 hari terakhir"}
+          right={<Pill text={`Total 14d: ${followUpCompletedTrend14d.total}`} />}
+        >
+          <Sparkline values={followUpCompletedTrend14d.values} />
+          <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12, color: "rgba(0,0,0,0.65)" }}>
+            <div>Max/day: {followUpCompletedTrend14d.max}</div>
+            <div>Last day: {followUpCompletedTrend14d.values?.[followUpCompletedTrend14d.values.length - 1] ?? 0}</div>
+          </div>
+        </Card>
+
+        <Card
+          title="Grafik Follow Up: Jatuh Tempo (Next)"
+          subtitle={followUpDueNext14d.rangeLabel ? `14 hari: ${followUpDueNext14d.rangeLabel}` : "14 hari ke depan"}
+          right={<Pill text={`Total: ${followUpDueNext14d.total}`} />}
+        >
+          <Sparkline values={followUpDueNext14d.values} />
+          <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12, color: "rgba(0,0,0,0.65)" }}>
+            <div>Max/day: {followUpDueNext14d.max}</div>
+            <div>Today: {followUpDueNext14d.values?.[0] ?? 0}</div>
+          </div>
+        </Card>
+            </div>
+
+            <div style={{ display: view === "perCategory" ? "contents" : "none" }}>
+        <Card id="sec-percategory" title="Grafik per Kategori: Audit Status" subtitle="Breakdown status per 5S Category (Top 8)">
+          <StackedBarList
+            items={chartAuditStatusByCategory}
+            colorForSegment={(label) => {
+              const s = String(label || "").trim().toLowerCase();
+              if (s === "open") return "#ef4444";
+              if (s === "in progress" || s === "inprogress") return "#f59e0b";
+              if (s === "closed") return "#16a34a";
+              return "#2563eb";
+            }}
+          />
+        </Card>
+
+        <Card title="Grafik per Kategori: Validasi 5S" subtitle="Breakdown OK/NG per 5S Category (Top 8)">
+          <StackedBarList
+            items={chartValidationByCategory}
+            colorForSegment={(label) => {
+              const s = String(label || "").trim().toLowerCase();
+              if (s === "ok") return "#16a34a";
+              if (s === "ng") return "#ef4444";
+              return colorFromLabel(label);
+            }}
+          />
+        </Card>
+
+        <Card title="Grafik per Kategori: Follow Up Tahap" subtitle="Overdue/On Track/Completed/No Plan per 5S Category (Top 8)">
+          <StackedBarList
+            items={chartFollowUpStageByCategory}
+            colorForSegment={(label) => {
+              const s = String(label || "").toLowerCase();
+              if (s === "completed") return "#16a34a";
+              if (s === "overdue") return "#ef4444";
+              if (s === "on track" || s === "ontrack") return "#2563eb";
+              if (s === "no plan" || s === "noplan") return "#64748b";
+              return colorFromLabel(label);
+            }}
+          />
+        </Card>
+            </div>
+
+            <div style={{ display: view === "trend" ? "contents" : "none" }}>
+        <Card id="sec-trend"
           title="Grafik: Trend Audit"
           subtitle={chartTrend14d.rangeLabel ? `14 hari: ${chartTrend14d.rangeLabel}` : "14 hari terakhir"}
           right={<Pill text={`Total 14d: ${chartTrend14d.total}`} />}
@@ -713,10 +1221,11 @@ export default function AuditDashboard({ source = "sample", listItems }) {
             <div>Last day: {chartTrend14d.values?.[chartTrend14d.values.length - 1] ?? 0}</div>
           </div>
         </Card>
+            </div>
       </div>
 
-      <div style={{ marginTop: 12 }}>
-        <Card
+      <div style={{ marginTop: 12, display: view === "table" ? "block" : "none" }}>
+        <Card id="sec-table"
           title="Tabel Audit"
           subtitle={showTable ? `Menampilkan ${rows.length} baris • 50 baris/halaman` : "Klik tombol untuk tampilkan tabel"}
           right={
@@ -760,6 +1269,25 @@ export default function AuditDashboard({ source = "sample", listItems }) {
                     {distinctAreas.map((a) => (
                       <option key={a} value={a}>
                         {a}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label style={{ display: "grid", gap: 6, flex: "0 1 220px" }}>
+                  <div style={{ fontSize: 12, color: "rgba(0,0,0,0.7)" }}>5S Category</div>
+                  <select
+                    value={category}
+                    onChange={(e) => {
+                      setCategory(e.target.value);
+                      setPage(1);
+                    }}
+                    style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 10, padding: "10px 12px" }}
+                  >
+                    <option value="">All</option>
+                    {distinctCategories.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
                       </option>
                     ))}
                   </select>
@@ -838,6 +1366,8 @@ export default function AuditDashboard({ source = "sample", listItems }) {
             </div>
           )}
         </Card>
+      </div>
+        </div>
       </div>
 
       <DetailPanel row={selected} onClose={() => setSelected(null)} />
