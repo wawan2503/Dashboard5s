@@ -8,6 +8,14 @@ import { authStorageKeys, loginRequest } from "./authConfig.js";
 
 let inMemoryAutoLoginAttempted = false;
 
+function loadLoginHint() {
+  try {
+    return localStorage.getItem(authStorageKeys.loginHint) || "";
+  } catch {
+    return "";
+  }
+}
+
 function getSessionFlag(key) {
   try {
     return sessionStorage.getItem(key) || "";
@@ -56,7 +64,17 @@ function RequireAuth({ instance, account, inProgress, err, setErr, children }) {
     try {
       setErr?.("");
       setIsRetrying(true);
-      await instance.loginRedirect({ ...loginRequest, prompt: "select_account" });
+
+      const loginHint = loadLoginHint();
+      // If we know the last username, let Microsoft auto-pick that account (no account picker).
+      // Fallback to account picker only when we don't have a hint.
+      const request = {
+        ...loginRequest,
+        ...(loginHint ? { loginHint } : null),
+        ...(loginHint ? null : { prompt: "select_account" }),
+      };
+
+      await instance.loginRedirect(request);
     } catch (e) {
       setErr?.(e?.message || String(e));
     } finally {
@@ -192,11 +210,6 @@ function DashboardPage({ instance, account, setErr, forceRerender }) {
       setSessionFlag(authStorageKeys.autoLoginAttempted, "0");
       instance.setActiveAccount?.(null);
       forceRerender();
-      try {
-        localStorage.removeItem(authStorageKeys.loginHint);
-      } catch {
-        // ignore
-      }
       await instance.logoutRedirect({ account });
     } catch (e) {
       setErr(e?.message || String(e));
