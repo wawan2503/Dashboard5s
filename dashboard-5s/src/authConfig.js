@@ -16,6 +16,12 @@ export const loginRequest = {
   scopes: ["User.Read"],
 };
 
+export const authStorageKeys = {
+  // Used for ssoSilent() bootstrap when MSAL cache is empty (e.g. storage cleared),
+  // but the user still has an active Microsoft session in the browser.
+  loginHint: "gem:msal_login_hint",
+};
+
 export const graphConfig = {
   graphMeEndpoint: "https://graph.microsoft.com/v1.0/me",
 };

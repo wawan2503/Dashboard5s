@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import { EventType, PublicClientApplication } from "@azure/msal-browser";
 import { MsalProvider } from "@azure/msal-react";
 import App from "./App.jsx";
-import { msalConfig } from "./authConfig.js";
+import { authStorageKeys, msalConfig } from "./authConfig.js";
 import "./index.css";
 import { ensureMsalReady } from "./msalBootstrap.js";
 
@@ -28,6 +28,13 @@ msalInstance.addEventCallback((event) => {
     event.payload?.account
   ) {
     msalInstance.setActiveAccount(event.payload.account);
+
+    try {
+      const username = event.payload.account.username;
+      if (username) localStorage.setItem(authStorageKeys.loginHint, username);
+    } catch {
+      // ignore (storage might be blocked)
+    }
   }
 });
 

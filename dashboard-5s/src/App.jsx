@@ -3,7 +3,7 @@ import React, { useEffect, useReducer, useState } from "react";
 import { useMsal } from "@azure/msal-react";
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import SharePointAuditDashboard from "./SharePointAuditDashboard.jsx";
-import { loginRequest, msalConfig } from "./authConfig.js";
+import { authStorageKeys, loginRequest, msalConfig } from "./authConfig.js";
 
 function Shell({ children }) {
   return <div style={{ width: "100%", margin: "0 auto" }}>{children}</div>;
@@ -34,6 +34,17 @@ function LoginPage({ instance, inProgress, err, setErr, account }) {
     try {
       setErr("");
       // Redirect keeps auth in the same tab (no popup/new-tab behavior).
+      // Don't force account-picker so returning users can stay signed-in after restart.
+      await instance.loginRedirect({ ...loginRequest });
+    } catch (e) {
+      setErr(e?.message || String(e));
+    }
+  };
+
+  const switchAccount = async () => {
+    try {
+      setErr("");
+      // Force account-picker when the user explicitly wants to change account.
       await instance.loginRedirect({ ...loginRequest, prompt: "select_account" });
     } catch (e) {
       setErr(e?.message || String(e));
@@ -58,6 +69,9 @@ function LoginPage({ instance, inProgress, err, setErr, account }) {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={login} disabled={inProgress === "login" || inProgress === "handleRedirect"}>
             Login
+          </button>
+          <button onClick={switchAccount} disabled={inProgress === "login" || inProgress === "handleRedirect"}>
+            Ganti Akun
           </button>
           <button onClick={goDashboard} disabled={!account}>
             Masuk Dashboard
@@ -92,6 +106,11 @@ function DashboardPage({ instance, account, setErr, forceRerender }) {
       setErr("");
       instance.setActiveAccount?.(null);
       forceRerender();
+      try {
+        localStorage.removeItem(authStorageKeys.loginHint);
+      } catch {
+        // ignore
+      }
       await instance.logoutRedirect({ account });
     } catch (e) {
       setErr(e?.message || String(e));
