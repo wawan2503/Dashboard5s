@@ -9,7 +9,13 @@ export const msalConfig = {
     navigateToLoginRequestUrl: false,
   },
   // Persist session across refresh/reopen so users don't have to login repeatedly.
-  cache: { cacheLocation: "localStorage" },
+  cache: {
+    cacheLocation: "localStorage",
+    // Important for some hosted environments/browsers where sessionStorage can be restricted.
+    // MSAL uses "temporary" storage during redirect flows; using localStorage prevents
+    // getting stuck with "no_token_request_cache_error" after returning from Microsoft.
+    temporaryCacheLocation: "localStorage",
+  },
 };
 
 export const loginRequest = {
