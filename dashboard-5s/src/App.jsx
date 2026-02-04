@@ -1,109 +1,120 @@
-// src/App.jsx
-import React, { useEffect, useReducer, useState } from "react";
+import React, { useEffect, useMemo, useReducer, useState } from "react";
+import { InteractionStatus } from "@azure/msal-browser";
 import { useMsal } from "@azure/msal-react";
-import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import Dashboard from "./Dashboard.jsx";
 import SharePointAuditDashboard from "./SharePointAuditDashboard.jsx";
-import { authStorageKeys, loginRequest, msalConfig } from "./authConfig.js";
+import { authStorageKeys, loginRequest } from "./authConfig.js";
 
-function Shell({ children }) {
-  return <div style={{ width: "100%", margin: "0 auto" }}>{children}</div>;
+function getSessionFlag(key) {
+  try {
+    return sessionStorage.getItem(key) || "";
+  } catch {
+    return "";
+  }
 }
 
-function RequireAuth({ account, children }) {
-  const location = useLocation();
-  if (!account) return <Navigate to="/" replace state={{ from: location }} />;
-  return children;
+function setSessionFlag(key, value) {
+  try {
+    sessionStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
 }
 
-function LoginPage({ instance, inProgress, err, setErr, account }) {
-  const navigate = useNavigate();
-  const location = useLocation();
+function Container({ children }) {
+  return (
+    <div style={{ width: "100%" }}>
+      {children}
+    </div>
+  );
+}
 
+function Card({ children }) {
+  return (
+    <div
+      style={{
+        background: "#fff",
+        border: "1px solid rgba(0,0,0,0.08)",
+        borderRadius: 12,
+        padding: 16,
+        boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function RequireAuth({ instance, account, inProgress, err, setErr, children }) {
   useEffect(() => {
-    if (account) {
-      const target = location.state?.from?.pathname || "/dashboard";
-      navigate(target, { replace: true });
-    }
-  }, [account, location.state, navigate]);
+    if (account) return;
+    if (inProgress !== InteractionStatus.None) return;
 
-  const goDashboard = () => {
-    navigate("/dashboard", { replace: true });
-  };
+    if (getSessionFlag(authStorageKeys.autoLoginAttempted) === "1") return;
 
-  const login = async () => {
-    try {
-      setErr("");
-      // Redirect keeps auth in the same tab (no popup/new-tab behavior).
-      // Don't force account-picker so returning users can stay signed-in after restart.
-      await instance.loginRedirect({ ...loginRequest });
-    } catch (e) {
-      setErr(e?.message || String(e));
-    }
-  };
+    setSessionFlag(authStorageKeys.autoLoginAttempted, "1");
+    void instance.loginRedirect({ ...loginRequest, prompt: "select_account" }).catch((e) => {
+      setErr?.(e?.message || String(e));
+    });
+  }, [account, inProgress, instance, setErr]);
 
-  const switchAccount = async () => {
-    try {
-      setErr("");
-      // Force account-picker when the user explicitly wants to change account.
-      await instance.loginRedirect({ ...loginRequest, prompt: "select_account" });
-    } catch (e) {
-      setErr(e?.message || String(e));
-    }
-  };
+  if (account) return children;
 
   return (
-    <Shell>
-      <div
-        style={{
-          maxWidth: 520,
-          margin: "72px auto",
-          background: "#fff",
-          border: "1px solid rgba(0,0,0,0.08)",
-          borderRadius: 12,
-          padding: 20,
-          boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
-        }}
-      >
-        <h2 style={{ marginTop: 0 }}>Login</h2>
-        <p style={{ color: "rgba(0,0,0,0.7)" }}>Silakan login untuk masuk ke halaman dashboard.</p>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={login} disabled={inProgress === "login" || inProgress === "handleRedirect"}>
-            Login
-          </button>
-          <button onClick={switchAccount} disabled={inProgress === "login" || inProgress === "handleRedirect"}>
-            Ganti Akun
-          </button>
-          <button onClick={goDashboard} disabled={!account}>
-            Masuk Dashboard
-          </button>
-        </div>
-        <div style={{ marginTop: 8, fontSize: 12, color: "rgba(0,0,0,0.6)" }}>Status: {String(inProgress)}</div>
-        <div style={{ marginTop: 4, fontSize: 12, color: "rgba(0,0,0,0.6)" }}>
-          Active account: {account?.username || "-"}
-        </div>
-        <div style={{ marginTop: 4, fontSize: 12, color: "rgba(0,0,0,0.6)" }}>
-          Redirect URI: {msalConfig?.auth?.redirectUri}
-        </div>
-        <div style={{ marginTop: 4, fontSize: 12, color: "rgba(0,0,0,0.6)" }}>
-          Authority: {msalConfig?.auth?.authority}
-        </div>
-
-        {err && (
-          <pre style={{ marginTop: 12, background: "#ffecec", color: "#a40000", padding: 10, borderRadius: 8 }}>
-            {err}
-          </pre>
-        )}
+    <Container>
+      <div style={{ marginTop: 72 }}>
+        <Card>
+          <h2 style={{ marginTop: 0, marginBottom: 6 }}>Memproses sesi Microsoft...</h2>
+          <div style={{ color: "rgba(0,0,0,0.7)", fontSize: 13 }}>
+            Jika belum ada sesi, halaman akan otomatis dialihkan ke login Microsoft.
+          </div>
+          <div style={{ marginTop: 10, fontSize: 12, color: "rgba(0,0,0,0.6)" }}>
+            Status: {String(inProgress || "-")}
+          </div>
+          {err ? (
+            <pre style={{ whiteSpace: "pre-wrap", marginTop: 12, background: "#ffecec", color: "#a40000", padding: 10, borderRadius: 8 }}>
+              {err}
+            </pre>
+          ) : null}
+        </Card>
       </div>
-    </Shell>
+    </Container>
+  );
+}
+
+function AppShell({ account, onLogout, children }) {
+  const userLabel = useMemo(() => {
+    const name = account?.name || "";
+    const username = account?.username || "";
+    return name && username ? `${name} (${username})` : name || username || "";
+  }, [account]);
+
+  return (
+    <Container>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.2 }}>Dashboard 5S</div>
+          {userLabel ? <div style={{ fontSize: 12, color: "rgba(0,0,0,0.6)" }}>Login sebagai {userLabel}</div> : null}
+        </div>
+        {account ? (
+          <button onClick={onLogout} type="button">
+            Logout
+          </button>
+        ) : null}
+      </div>
+      {children}
+    </Container>
   );
 }
 
 function DashboardPage({ instance, account, setErr, forceRerender }) {
-  const navigate = useNavigate();
+  const [tab, setTab] = useState("audit");
 
-  const logout = async () => {
+  const onLogout = async () => {
     try {
       setErr("");
+      setSessionFlag(authStorageKeys.autoLoginAttempted, "0");
       instance.setActiveAccount?.(null);
       forceRerender();
       try {
@@ -114,53 +125,24 @@ function DashboardPage({ instance, account, setErr, forceRerender }) {
       await instance.logoutRedirect({ account });
     } catch (e) {
       setErr(e?.message || String(e));
-      navigate("/", { replace: true });
     }
   };
 
   return (
-    <Shell>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
-        <button onClick={logout}>Logout</button>
-      </div>
-      <SharePointAuditDashboard instance={instance} account={account} />
-    </Shell>
-  );
-}
+    <AppShell account={account} onLogout={onLogout}>
+      <Card>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <button onClick={() => setTab("audit")} type="button" disabled={tab === "audit"}>
+            Audit 5S (SharePoint)
+          </button>
+          <button onClick={() => setTab("graph")} type="button" disabled={tab === "graph"}>
+            Profil (Graph)
+          </button>
+        </div>
 
-function AppRoutes({ instance, accounts, inProgress, err, setErr, forceRerender }) {
-  const active = instance.getActiveAccount?.();
-  const any = accounts?.[0] || instance.getAllAccounts?.()?.[0];
-  const account = active || any;
-
-  useEffect(() => {
-    if (!active && any) instance.setActiveAccount?.(any);
-  }, [active, any, instance]);
-
-  return (
-    <Routes>
-      <Route
-        path="/"
-        element={
-          <LoginPage
-            instance={instance}
-            inProgress={inProgress}
-            err={err}
-            setErr={setErr}
-            account={account}
-          />
-        }
-      />
-      <Route
-        path="/dashboard"
-        element={
-          <RequireAuth account={account}>
-            <DashboardPage instance={instance} account={account} setErr={setErr} forceRerender={forceRerender} />
-          </RequireAuth>
-        }
-      />
-      <Route path="*" element={<Navigate to={account ? "/dashboard" : "/"} replace />} />
-    </Routes>
+        {tab === "audit" ? <SharePointAuditDashboard instance={instance} account={account} /> : <Dashboard instance={instance} account={account} />}
+      </Card>
+    </AppShell>
   );
 }
 
@@ -169,16 +151,28 @@ export default function App() {
   const [, forceRerender] = useReducer((x) => x + 1, 0);
   const [err, setErr] = useState("");
 
+  const activeAccount = instance.getActiveAccount?.() || accounts?.[0] || instance.getAllAccounts?.()?.[0] || null;
+
+  useEffect(() => {
+    const current = instance.getActiveAccount?.();
+    const fallback = accounts?.[0] || instance.getAllAccounts?.()?.[0] || null;
+    if (!current && fallback) instance.setActiveAccount?.(fallback);
+  }, [accounts, instance]);
+
   return (
-    <HashRouter>
-      <AppRoutes
-        instance={instance}
-        accounts={accounts}
-        inProgress={inProgress}
-        err={err}
-        setErr={setErr}
-        forceRerender={forceRerender}
-      />
-    </HashRouter>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route
+          path="/dashboard"
+          element={
+            <RequireAuth instance={instance} account={activeAccount} inProgress={inProgress} err={err} setErr={setErr}>
+              <DashboardPage instance={instance} account={activeAccount} setErr={setErr} forceRerender={forceRerender} />
+            </RequireAuth>
+          }
+        />
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      </Routes>
+    </BrowserRouter>
   );
 }

@@ -20,6 +20,8 @@ export const authStorageKeys = {
   // Used for ssoSilent() bootstrap when MSAL cache is empty (e.g. storage cleared),
   // but the user still has an active Microsoft session in the browser.
   loginHint: "gem:msal_login_hint",
+  // Session-only flag to prevent repeated auto-redirect loops.
+  autoLoginAttempted: "gem:auto_login_attempted",
 };
 
 export const graphConfig = {
