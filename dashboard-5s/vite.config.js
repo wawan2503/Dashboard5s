@@ -7,4 +7,12 @@ export default defineConfig(({ command }) => ({
   // Dev stays at '/' so HMR paths remain stable.
   base: command === 'build' ? './' : '/',
   plugins: [react()],
+  server: {
+    port: 8001,
+    strictPort: true,
+  },
+  preview: {
+    port: 8001,
+    strictPort: true,
+  },
 }))

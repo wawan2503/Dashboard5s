@@ -24,34 +24,7 @@ function decodeJwtClaim(token, claimName) {
   }
 }
 
-function Card({ title, children }) {
-  return (
-    <div
-      style={{
-        background: "#fff",
-        border: "1px solid rgba(0,0,0,0.08)",
-        borderRadius: 12,
-        padding: 16,
-        boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
-        marginBottom: 12,
-      }}
-    >
-      <div style={{ fontWeight: 800, marginBottom: 8 }}>{title}</div>
-      {children}
-    </div>
-  );
-}
-
-async function fetchAllListItems({
-  instance,
-  account,
-  hostname,
-  sitePath,
-  listId,
-  pageSize = 200,
-  maxPages = 20,
-  onTokenScopes,
-}) {
+async function fetchAllListItems({ instance, account, hostname, sitePath, listId, pageSize = 200, maxPages = 20, onTokenScopes }) {
   const accessToken = await acquireAccessToken({
     instance,
     account,
@@ -98,45 +71,39 @@ function normalizeKey(key) {
     .replace(/[^a-z0-9]+/g, "");
 }
 
-function getAnyFieldValue(fieldsObj, desiredLabel) {
+function isMeaningfulValue(v) {
+  if (v === null || v === undefined) return false;
+  if (typeof v === "string") return v.trim() !== "";
+  return true;
+}
+
+function getFieldValue(fieldsObj, label, fieldMap) {
   if (!fieldsObj) return "";
-  const desired = normalizeKey(desiredLabel);
+
+  const alias = fieldMap?.[label];
+  const candidates = Array.isArray(alias) ? alias : alias ? [alias] : [];
+  for (const k of candidates) {
+    if (k in fieldsObj && isMeaningfulValue(fieldsObj[k])) return fieldsObj[k];
+  }
+
+  const desired = normalizeKey(label);
   for (const k of Object.keys(fieldsObj)) {
     if (normalizeKey(k) === desired) return fieldsObj[k];
   }
-  if (desiredLabel in fieldsObj) return fieldsObj[desiredLabel];
+
+  if (label in fieldsObj) return fieldsObj[label];
   return "";
 }
 
-function mapGraphItemsToRows(items) {
+function mapGraphItemsToRows(items, fieldMap) {
   return (items || []).map((item) => {
     const fields = item?.fields && typeof item.fields === "object" ? item.fields : null;
     if (!fields) return item;
     const row = { id: item.id };
-    row.Title = getAnyFieldValue(fields, "Title");
-    for (const f of AUDIT_FIELDS) row[f] = getAnyFieldValue(fields, f);
+    row.Title = getFieldValue(fields, "Title", fieldMap);
+    for (const f of AUDIT_FIELDS) row[f] = getFieldValue(fields, f, fieldMap);
     return row;
   });
-}
-
-function valueToSearchText(value) {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function rowMatchesUser(row, needles) {
-  const fieldsToCheck = ["Created By", "Modified By", "Auditor", "Auditee", "Auditee2", "Add Auditee", "Approval Creator", "Approvers"];
-  const hay = fieldsToCheck
-    .map((k) => valueToSearchText(row?.[k]))
-    .join(" ")
-    .toLowerCase();
-  return needles.some((n) => n && hay.includes(n));
 }
 
 export default function SharePointAuditDashboard({ instance, account }) {
@@ -144,10 +111,10 @@ export default function SharePointAuditDashboard({ instance, account }) {
   const [error, setError] = useState("");
   const [siteId, setSiteId] = useState("");
   const [items, setItems] = useState(null);
-  const [onlyMine, setOnlyMine] = useState(true);
   const [tokenScopes, setTokenScopes] = useState("");
 
   const config = useMemo(() => sharepointListConfig, []);
+  const rows = useMemo(() => mapGraphItemsToRows(items || [], config.fieldMap), [config.fieldMap, items]);
 
   const load = async () => {
     try {
@@ -169,110 +136,41 @@ export default function SharePointAuditDashboard({ instance, account }) {
         // ignore
       }
     } catch (e) {
-      setError(e?.message || String(e));
+      const msg = e?.message || String(e);
+      // acquireAccessToken() triggers redirect and throws; avoid flashing error.
+      if (/redirecting/i.test(msg)) return;
+      setError(msg);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    // Reset when account changes.
+    // Auto-load when account changes.
     setError("");
     setSiteId("");
     setItems(null);
-    setOnlyMine(true);
     setTokenScopes("");
-  }, [account?.homeAccountId]);
-
-  useEffect(() => {
-    if (!account) return;
-    if (items !== null) return;
-    try {
-      const shouldAuto = sessionStorage.getItem("sp:autoload") === "1";
-      if (shouldAuto) void load();
-    } catch {
-      // ignore
-    }
+    if (account) void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [account?.homeAccountId, items]);
-
-  const rows = useMemo(() => {
-    const mapped = mapGraphItemsToRows(items || []);
-    if (!onlyMine) return mapped;
-
-    const needles = [
-      account?.username?.toLowerCase(),
-      account?.name?.toLowerCase(),
-    ].filter(Boolean);
-
-    if (needles.length === 0) return mapped;
-    return mapped.filter((r) => rowMatchesUser(r, needles));
-  }, [account?.name, account?.username, items, onlyMine]);
+  }, [account?.homeAccountId]);
 
   return (
     <div>
-      <Card title="SharePoint List Source">
-        <div style={{ fontSize: 13, color: "rgba(0,0,0,0.8)", lineHeight: 1.5 }}>
-          <div>
-            <b>Host:</b> {config.hostname}
-          </div>
-          <div>
-            <b>Site path:</b> /{config.sitePath}
-          </div>
-          <div>
-            <b>List ID:</b> {config.listId}
-          </div>
-          <div>
-            <b>Site ID:</b> {siteId || "-"}
-          </div>
-          <div>
-            <b>Items (total):</b> {Array.isArray(items) ? items.length : "-"}
-          </div>
-          <div>
-            <b>Items (ditampilkan):</b> {Array.isArray(items) ? rows.length : "-"}
-          </div>
-          <div>
-            <b>Token scopes (scp):</b> {tokenScopes || "-"}
-          </div>
-          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button onClick={load} disabled={loading}>
-              {loading ? "Loading..." : "Ambil Data SharePoint"}
-            </button>
-          </div>
-          <label style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
-            <input
-              type="checkbox"
-              checked={onlyMine}
-              onChange={(e) => setOnlyMine(e.target.checked)}
-              disabled={!Array.isArray(items)}
-            />
-            Hanya data saya (filter by Created By / Auditor / Auditee)
-          </label>
-          {Array.isArray(items) && items.length > 0 && rows.length === 0 && onlyMine ? (
-            <div style={{ marginTop: 10, fontSize: 12, color: "#7a5d00", background: "rgba(241, 196, 15, 0.18)", padding: 10, borderRadius: 10 }}>
-              Data ada, tapi filter “Hanya data saya” tidak menemukan kecocokan untuk akun ini. Coba matikan centang untuk melihat semua data.
-            </div>
-          ) : null}
-          {items === null ? (
-            <div style={{ marginTop: 10, fontSize: 12, color: "rgba(0,0,0,0.65)" }}>
-              Belum ambil data. Klik “Ambil Data SharePoint”. Jika diminta consent <code>Sites.Read.All</code>, setelah kembali ke app akan auto-load lagi.
-            </div>
-          ) : null}
-          <div style={{ marginTop: 10, fontSize: 12, color: "rgba(0,0,0,0.65)" }}>
-            Permission yang dipakai: delegated <code>Sites.Read.All</code>. Kalau muncul error admin consent, klik “Grant admin consent” di Azure App Registration.
-          </div>
-        </div>
-      </Card>
-
       {error ? (
-        <Card title="Error">
-          <pre style={{ whiteSpace: "pre-wrap", margin: 0, background: "#ffecec", color: "#a40000", padding: 10, borderRadius: 8 }}>
-            {error}
-          </pre>
-        </Card>
+        <pre style={{ whiteSpace: "pre-wrap", margin: "0 0 12px 0", background: "#ffecec", color: "#a40000", padding: 10, borderRadius: 10 }}>
+          {error}
+        </pre>
       ) : null}
 
-      <AuditDashboard source="sharepoint-list" listItems={items === null ? [] : rows} />
+      {loading ? (
+        <div style={{ marginBottom: 12, fontSize: 13, color: "rgba(0,0,0,0.65)" }}>Mengambil data SharePoint...</div>
+      ) : null}
+
+      <AuditDashboard source={`sharepoint-list:${siteId || config.listId}`} listItems={rows} />
+      {tokenScopes ? (
+        <div style={{ marginTop: 10, fontSize: 11, color: "rgba(0,0,0,0.5)" }}>Token scopes: {tokenScopes}</div>
+      ) : null}
     </div>
   );
 }

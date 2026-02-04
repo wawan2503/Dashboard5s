@@ -6,7 +6,7 @@ import SharePointAuditDashboard from "./SharePointAuditDashboard.jsx";
 import { loginRequest, msalConfig } from "./authConfig.js";
 
 function Shell({ children }) {
-  return <div style={{ maxWidth: 1100, margin: "0 auto" }}>{children}</div>;
+  return <div style={{ width: "100%", margin: "0 auto" }}>{children}</div>;
 }
 
 function RequireAuth({ account, children }) {
